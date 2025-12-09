@@ -3,7 +3,9 @@ FROM oven/bun:latest
 WORKDIR /app
 
 # Copy package files first to leverage layer caching
-COPY package.json package-lock.json* bun.lockb* ./ 2>/dev/null || true
+# Note: Dockerfile's COPY does not support shell redirection or boolean operators.
+# Use explicit COPY for package.json (lockfiles will be included when copying the context below).
+COPY package.json ./
 COPY . /app
 
 # Install dependencies
