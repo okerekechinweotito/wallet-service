@@ -1,150 +1,94 @@
-To install dependencies:
-```sh
+# Wallet Service Backend
+
+This project is a backend wallet service built with Bun, Hono, and PostgreSQL. It provides:
+
+- Google Sign-in (JWT authentication)
+- API key management (permissions, expiry, rollover)
+- Paystack deposit integration (with mandatory webhook)
+- Wallet balances, transaction history, wallet-to-wallet transfers
+- OpenAPI documentation at `/openapi`, `/swagger`, and `/scalar`
+
+## Quick Start
+
+### 1. Install dependencies
 ```bash
 bun install
 ```
 
-## Run (development)
-
+### 2. Setup PostgreSQL (Docker recommended)
+Run a local Postgres instance for development:
 ```bash
-bun run dev
+docker run --name wallet-postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_DB=wallet_db \
+  -p 5432:5432 -d postgres:15
 ```
 
-open http://localhost:3000
-
----
-
-# Wallet Service (Stage 8)
-
-This repository implements a backend Wallet Service with:
-
-- Google Sign-in (issues JWT tokens)
-- API Key management for service-to-service access (permissions, expiry, rollover)
-- Paystack deposit initialization and webhook handling (mandatory webhook)
-- Wallet balances, transaction history, and wallet-to-wallet transfers
-- PostgreSQL persistence
-- OpenAPI documentation served at `/openapi`, `/swagger`, and `/scalar`
-
-This README explains how to set up, run, and test the service locally.
-
-## Prerequisites
-
-- Bun (runtime and package manager)
-- A running PostgreSQL instance (a Docker postgres is assumed available locally)
-- `psql` (or another way to run SQL scripts)
-
-Example Docker for Postgres (optional):
-
-```bash
-docker run --name wallet-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=wallet_db -p 5432:5432 -d postgres:15
-```
-
-## Environment Variables
-
-Set the following environment variables (we rely on Bun's env support or process.env):
-
-- `DATABASE_URL` — PostgreSQL connection string, e.g.: `postgresql://postgres:postgres@localhost:5432/wallet_db`
-- `JWT_SECRET` — secret used to sign JWTs (keep private)
-- `GOOGLE_CLIENT_ID` — OAuth client id for Google sign-in
-- `GOOGLE_CLIENT_SECRET` — OAuth client secret for Google sign-in
-- `PAYSTACK_SECRET` — Paystack secret key for API calls and webhook verification
-
-You can export them in zsh before running the app:
-
+### 3. Configure environment variables
+Create a `.env` file at the repo root or export these in your shell. Example values shown for local development only:
 ```bash
 export DATABASE_URL='postgresql://postgres:postgres@localhost:5432/wallet_db'
-export JWT_SECRET='a_strong_random_secret'
-export GOOGLE_CLIENT_ID='your_google_client_id'
-export GOOGLE_CLIENT_SECRET='your_google_client_secret'
-export PAYSTACK_SECRET='sk_test_xxx'
+export JWT_SECRET='your-strong-jwt-secret'
+export GOOGLE_CLIENT_ID='your-google-client-id.apps.googleusercontent.com'
+export GOOGLE_CLIENT_SECRET='your-google-client-secret'
+export PAYSTACK_SECRET='sk_test_your_paystack_secret'
 ```
 
-## Install
-
-```bash
-bun install
-```
-
-## Database initialization
-
-Run the SQL migration to create the required tables:
-
+### 4. Initialize the database
 ```bash
 psql "$DATABASE_URL" -f src/shared/db/init.sql
 ```
 
-This creates the `users`, `wallets`, `transactions`, and `api_keys` tables used by the service.
-
-## Run (development)
-
+### 5. Run the development server
 ```bash
 bun run dev
 ```
 
-The server serves:
+Server will be available at: http://localhost:3000
 
-- API root: `http://localhost:3000/`
-- Raw OpenAPI JSON: `http://localhost:3000/openapi`
+## Documentation Endpoints
+
+- OpenAPI JSON: `http://localhost:3000/openapi`
 - Swagger UI: `http://localhost:3000/swagger`
 - Scalar docs: `http://localhost:3000/scalar`
 
-## Key Endpoints (summary)
+Open any of these in the browser to explore and test the API.
 
-Authentication
-- `GET /auth/google` — redirect to Google sign-in
-- `GET /auth/google/callback` — callback, returns `{ token: <JWT> }`
+## Environment Variables
 
-API Keys (requires JWT auth)
-- `POST /keys/create` — create API key. Body: `{ name, permissions: ["deposit","transfer","read"], expiry: "1D" }` → returns `{ api_key, expires_at }`.
-- `POST /keys/rollover` — rollover an expired key. Body: `{ expired_key_id, expiry }`.
+- `DATABASE_URL` — PostgreSQL connection string
+- `JWT_SECRET` — JWT signing secret (keep secret in production)
+- `GOOGLE_CLIENT_ID` — Google OAuth client ID
+- `GOOGLE_CLIENT_SECRET` — Google OAuth client secret
+- `PAYSTACK_SECRET` — Paystack secret key (used for verify and webhook validation)
 
-Wallet
-- `POST /wallet/deposit` — init Paystack deposit. Body: `{ amount }`. Requires `deposit` permission for API keys.
-- `POST /wallet/paystack/webhook` — Paystack webhook (signature validated). Server credits wallet only on success.
-- `GET /wallet/deposit/{reference}/status` — query Paystack for reference status (does not credit).
-- `GET /wallet/balance` — get wallet balance (JWT or API key with `read` permission). Optional `user_id` query param for API key usage.
-- `POST /wallet/transfer` — transfer to another wallet. Body: `{ wallet_number, amount }`. Requires `transfer` permission for API keys.
-- `GET /wallet/transactions` — list transactions (JWT or API key with `read` permission). Supports `page` and `limit`.
+## Key Endpoints (Overview)
+See the OpenAPI docs for full request/response schemas and examples.
 
-See the full API documentation at `/openapi`, or use Swagger UI at `/swagger`.
+### Authentication
+- `GET /auth/google` — Redirect to Google sign-in
+- `GET /auth/google/callback` — OAuth callback, returns JWT
 
-## Testing Paystack webhook locally
+### API Keys (JWT required)
+- `POST /keys/create` — Create API key
+- `POST /keys/rollover` — Rollover an expired API key
 
-You can simulate a Paystack webhook by making a POST to `/wallet/paystack/webhook` with a JSON body similar to Paystack's and a correct `x-paystack-signature` header.
+### Wallet Operations
+- `GET /wallet/balance` — Get wallet balance
+- `POST /wallet/deposit` — Initialize Paystack deposit
+- `POST /wallet/paystack/webhook` — Paystack webhook (server-to-server)
+- `GET /wallet/paystack/webhook` — Paystack browser redirect (callback_url)
+- `GET /wallet/deposit/{reference}/status` — Verify deposit status (read-only)
+- `POST /wallet/transfer` — Transfer funds to another wallet
+- `GET /wallet/transactions` — Transaction history
 
-Example (generate signature using `PAYSTACK_SECRET`):
 
-```bash
-BODY='{"event":"charge.success","data":{"reference":"ps_testref","status":"success","amount":500000}}'
-SIGNATURE=$(printf "%s" "$BODY" | openssl dgst -sha512 -hmac "$PAYSTACK_SECRET" -hex | sed 's/^.* //')
+## Next Steps / Improvements
 
-curl -X POST http://localhost:3000/wallet/paystack/webhook \
-	-H "Content-Type: application/json" \
-	-H "x-paystack-signature: $SIGNATURE" \
-	-d "$BODY"
-```
-
-Note: amounts are in kobo (multiply by 100 when initializing Paystack transactions in `POST /wallet/deposit`). The code stores and returns base-unit (e.g., Naira) amounts.
-
-## OpenAPI / Swagger
-
-The OpenAPI specification is in `src/shared/docs/openapi.json`. The server exposes it at `/openapi` and provides Swagger UI at `/swagger` and Scalar docs at `/scalar`.
-
-If you change endpoints, update the OpenAPI JSON accordingly.
-
-## Security notes
-
-- API keys are stored in the `api_keys` table. For production, consider storing only hashed API keys and never returning stored key values after creation.
-- Validate webhooks using `PAYSTACK_SECRET` (already implemented).
-- Enforce HTTPS and secure storage of secrets in production.
-
-## Next steps / TODOs
-
-- Add automated DB migrations (instead of manual `init.sql`).
-- Add unit and integration tests (especially for webhook idempotency and transfers).
-- Hash API keys at rest, avoid storing plaintext keys.
-- Add monitoring/metrics and rate limiting for payment endpoints.
+- Add automated DB migrations (e.g., migrate tool)
+- Add unit and integration tests
+- Hash API keys at rest
+- Add monitoring and rate limiting
 
 ---
-
-If you'd like, I can also add a `README.dev.md` with quick dev commands, or generate a Postman collection from the OpenAPI spec.

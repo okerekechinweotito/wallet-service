@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: wallet-service
+    env: docker
+    plan: starter
+    region: oregon
+    branch: main
+    dockerfilePath: Dockerfile
+    buildCommand: ""
+    startCommand: ""
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: wallet-db
+          property: connectionString
+      - key: JWT_SECRET
+        value: "change_me"
+      - key: GOOGLE_CLIENT_ID
+        value: ""
+      - key: GOOGLE_CLIENT_SECRET
+        value: ""
+      - key: PAYSTACK_SECRET
+        value: ""
+
+databases:
+  - name: wallet-db
+    engine: postgres
+    plan: starter
+    region: oregon
