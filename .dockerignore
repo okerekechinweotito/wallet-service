@@ -1,0 +1,37 @@
+# Ignore local deps and runtime artifacts
+node_modules
+
+# Git
+.git
+
+# Build / output
+dist
+build
+.out
+.cache
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Logs
+logs
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
+# Test coverage
+coverage
+.nyc_output
+
+# Dockerfile itself and dotfiles can remain, but don't copy large files
+.dockerignore
+
+# Keep Bun lockfile in the build context for reproducible installs
+bun.lockb
