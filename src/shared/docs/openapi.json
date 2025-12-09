@@ -1,0 +1,585 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Wallet Service API",
+    "version": "1.0.0",
+    "description": "Wallet service with Paystack deposits, JWT (Google) auth and API key access."
+  },
+  "servers": [{ "url": "/" }],
+  "tags": [
+    { "name": "Auth", "description": "Google authentication endpoints" },
+    { "name": "Keys", "description": "API key management endpoints" },
+    {
+      "name": "Wallet",
+      "description": "Wallet operations, deposits, transfers, Paystack integration (webhook, redirect, verify)"
+    },
+    { "name": "Transactions", "description": "Transaction history and status" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "detail": { "type": "object" }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "email": { "type": "string" },
+          "name": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ApiKeyCreate": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "example": "wallet-service" },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["deposit", "transfer", "read"]
+            },
+            "example": ["deposit", "read"]
+          },
+          "expiry": {
+            "type": "string",
+            "description": "1H,1D,1M,1Y",
+            "example": "1D"
+          }
+        },
+        "required": ["name", "permissions", "expiry"]
+      },
+      "ApiKeyResponse": {
+        "type": "object",
+        "properties": {
+          "api_key": { "type": "string", "example": "sk_live_xxxxx" },
+          "name": { "type": "string", "example": "wallet-service" },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2025-01-01T12:00:00Z"
+          }
+        }
+      },
+      "RolloverRequest": {
+        "type": "object",
+        "properties": {
+          "expired_key_id": {
+            "type": "string",
+            "example": "FGH2485K6KK79GKG9GKGK"
+          },
+          "expiry": { "type": "string", "example": "1M" }
+        },
+        "required": ["expired_key_id", "expiry"]
+      },
+      "DepositRequest": {
+        "type": "object",
+        "properties": { "amount": { "type": "number", "example": 5000 } },
+        "required": ["amount"]
+      },
+      "DepositInitResponse": {
+        "type": "object",
+        "properties": {
+          "reference": { "type": "string", "example": "ps_abc123" },
+          "authorization_url": {
+            "type": "string",
+            "example": "https://paystack.co/checkout/abc"
+          }
+        }
+      },
+      "DepositStatus": {
+        "type": "object",
+        "properties": {
+          "reference": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["success", "failed", "pending"]
+          },
+          "amount": { "type": "number" }
+        }
+      },
+      "BalanceResponse": {
+        "type": "object",
+        "properties": { "balance": { "type": "number", "example": 15000 } }
+      },
+      "TransferRequest": {
+        "type": "object",
+        "properties": {
+          "wallet_number": { "type": "string", "example": "4566678954356" },
+          "amount": { "type": "number", "example": 3000 }
+        },
+        "required": ["wallet_number", "amount"]
+      },
+      "TransferResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "success" },
+          "message": { "type": "string", "example": "Transfer completed" },
+          "reference": { "type": "string", "example": "tr_abc123" }
+        }
+      },
+      "TransactionItem": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "example": "deposit" },
+          "amount": { "type": "number", "example": 5000 },
+          "status": { "type": "string", "example": "success" },
+          "reference": { "type": "string", "example": "ps_abc123" },
+          "from_user_id": {
+            "type": "string",
+            "example": "google-oauth|1234567890"
+          },
+          "to_wallet_number": { "type": "string", "example": "4566678954356" },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2025-01-01T12:00:00Z"
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/auth/google": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "Redirect to Google sign-in",
+        "description": "Starts the Google OAuth2 authorization code flow. Redirects the user to Google's consent screen.",
+        "responses": {
+          "302": { "description": "Redirect to Google" }
+        }
+      }
+    },
+    "/auth/google/callback": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "Google OAuth callback",
+        "description": "Callback endpoint Google redirects to. Exchanges code for tokens, upserts user, and returns a JWT for the client.",
+        "responses": {
+          "200": {
+            "description": "Returns JWT token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": { "type": "string", "example": "eyJhbGciOi..." }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Bad request" },
+          "500": { "description": "Server error" }
+        }
+      }
+    },
+    "/keys/create": {
+      "post": {
+        "tags": ["Keys"],
+        "summary": "Create API key",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ApiKeyCreate" },
+              "examples": {
+                "create": {
+                  "value": {
+                    "name": "wallet-service",
+                    "permissions": ["deposit", "read", "transfer"],
+                    "expiry": "1D"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "API key created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiKeyResponse" },
+                "examples": {
+                  "created": {
+                    "value": {
+                      "api_key": "sk_live_xxxxx",
+                      "expires_at": "2025-01-01T12:00:00Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request / limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/keys/rollover": {
+      "post": {
+        "tags": ["Keys"],
+        "summary": "Rollover an expired API key",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RolloverRequest" },
+              "examples": {
+                "roll": {
+                  "value": {
+                    "expired_key_id": "FGH2485K6KK79GKG9GKGK",
+                    "expiry": "1M"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "New API key created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiKeyResponse" }
+              }
+            }
+          },
+          "400": { "description": "Bad request" },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/wallet/deposit": {
+      "post": {
+        "tags": ["Wallet"],
+        "summary": "Initialize a Paystack deposit",
+        "security": [{ "bearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DepositRequest" },
+              "examples": { "amount": { "value": { "amount": 5000 } } }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Paystack init response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositInitResponse"
+                },
+                "examples": {
+                  "init": {
+                    "value": {
+                      "reference": "ps_abc123",
+                      "authorization_url": "https://paystack.co/checkout/abc"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "API key missing permission" },
+          "500": { "description": "Server error" }
+        }
+      }
+    },
+    "/wallet/paystack/webhook": {
+      "post": {
+        "tags": ["Wallet"],
+        "summary": "Paystack webhook receiver (validate signature)",
+        "description": "Paystack will POST transaction updates here. Validate the x-paystack-signature header and only credit on success. This endpoint is for server-to-server notifications and is idempotent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "event": { "type": "string", "example": "charge.success" },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "reference": {
+                        "type": "string",
+                        "example": "ps_testref"
+                      },
+                      "status": { "type": "string", "example": "success" },
+                      "amount": { "type": "number", "example": 500000 }
+                    }
+                  }
+                }
+              },
+              "examples": {
+                "paystack-webhook": {
+                  "value": {
+                    "event": "charge.success",
+                    "data": {
+                      "reference": "ps_testref",
+                      "status": "success",
+                      "amount": 500000
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "x-paystack-signature",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "HMAC SHA512 signature of the request body using your Paystack secret key."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Webhook processed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "boolean" } },
+                  "example": { "status": true }
+                }
+              }
+            }
+          },
+          "401": { "description": "Invalid signature" },
+          "500": { "description": "Server error" }
+        }
+      },
+      "get": {
+        "tags": ["Wallet"],
+        "summary": "Paystack browser redirect (callback_url)",
+        "description": "After a user completes payment, Paystack redirects the browser to this endpoint (callback_url). It verifies the transaction and credits the wallet if successful. Displays a friendly HTML message for the user.",
+        "parameters": [
+          {
+            "name": "reference",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Paystack transaction reference (or trxref)"
+          },
+          {
+            "name": "trxref",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Alternate reference param from Paystack"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HTML page with payment status"
+          },
+          "400": { "description": "Missing reference" },
+          "500": { "description": "Server error" }
+        }
+      }
+    },
+    "/wallet/deposit/{reference}/status": {
+      "get": {
+        "tags": ["Wallet"],
+        "summary": "Verify deposit status via Paystack (read-only)",
+        "parameters": [
+          {
+            "name": "reference",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deposit status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DepositStatus" },
+                "examples": {
+                  "ok": {
+                    "value": {
+                      "reference": "ps_abc123",
+                      "status": "success",
+                      "amount": 5000
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": { "description": "Server error" }
+        }
+      }
+    },
+    "/wallet/balance": {
+      "get": {
+        "tags": ["Wallet"],
+        "summary": "Get wallet balance",
+        "security": [{ "bearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": { "type": "string" },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Balance response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BalanceResponse" },
+                "examples": { "balance": { "value": { "balance": 15000 } } }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "API key missing read permission" }
+        }
+      }
+    },
+    "/wallet/transfer": {
+      "post": {
+        "tags": ["Transactions"],
+        "summary": "Transfer funds to another wallet",
+        "security": [{ "bearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TransferRequest" },
+              "examples": {
+                "transfer": {
+                  "value": { "wallet_number": "4566678954356", "amount": 3000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transfer completed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TransferResponse" },
+                "examples": {
+                  "ok": {
+                    "value": {
+                      "status": "success",
+                      "message": "Transfer completed",
+                      "reference": "tr_abc123"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Bad request / insufficient balance" },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "API key missing transfer permission" }
+        }
+      }
+    },
+    "/wallet/transactions": {
+      "get": {
+        "tags": ["Transactions"],
+        "summary": "Get wallet transaction history",
+        "security": [{ "bearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "parameters": [
+          { "name": "user_id", "in": "query", "schema": { "type": "string" } },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": { "type": "integer", "default": 1 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/TransactionItem" }
+                },
+                "examples": {
+                  "list": {
+                    "value": [
+                      {
+                        "type": "deposit",
+                        "amount": 5000,
+                        "status": "success",
+                        "reference": "ps_abc123",
+                        "from_user_id": null,
+                        "to_wallet_number": "4566678954356",
+                        "created_at": "2025-01-01T12:00:00Z"
+                      },
+                      {
+                        "type": "transfer",
+                        "amount": 3000,
+                        "status": "success",
+                        "reference": "tr_abc123",
+                        "from_user_id": "google-oauth|1234567890",
+                        "to_wallet_number": "4566678954356",
+                        "created_at": "2025-01-02T09:30:00Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "API key missing read permission" }
+        }
+      }
+    }
+  }
+}
