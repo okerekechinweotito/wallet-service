@@ -35,7 +35,9 @@ router.get("/google/callback", async (c) => {
   try {
     const code = c.req.query("code") || "";
     const baseUrl = new URL(c.req.url).origin;
-    const redirectUri = `${baseUrl}/auth/google/callback`;
+    // const redirectUri = `${baseUrl}/auth/google/callback`;
+    const redirectUri =
+      "https://wallet-service-q4cc.onrender.com/auth/google/callback";
     if (!code) return c.json({ error: "Missing code" }, 400);
     if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)
       return c.json({ error: "Google credentials not configured" }, 500);
