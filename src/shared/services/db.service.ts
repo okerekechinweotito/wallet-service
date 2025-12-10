@@ -9,10 +9,43 @@ if (!connectionString) {
   throw new Error("DATABASE_URL environment variable is required");
 }
 
-const pool = new Pool({ connectionString });
+// Log the DB host for easier debugging (don't log full credentials in production)
+try {
+  const parsed = new URL(connectionString);
+  console.info("DB host:", parsed.hostname, "port:", parsed.port);
+} catch (err) {
+  console.warn("Could not parse DATABASE_URL for host info");
+}
+
+let pool: Pool;
+try {
+  pool = new Pool({ connectionString });
+} catch (err: any) {
+  console.error("Failed to create Postgres pool", { error: err.message });
+  throw err;
+}
+
+// Surface pool-level errors (e.g., DNS/connectivity)
+try {
+  pool.on("error", (err: Error) => {
+    console.error("Postgres pool error", {
+      message: err.message,
+      stack: (err as any).stack,
+    });
+  });
+} catch (err) {
+  console.warn("Could not attach pool error handler", {
+    error: (err as any).message,
+  });
+}
 
 export async function query(text: string, params?: any[]) {
-  return pool.query(text, params);
+  try {
+    return await pool.query(text, params);
+  } catch (err: any) {
+    console.error("DB query error", { message: err.message, stack: err.stack });
+    throw err;
+  }
 }
 
 export async function withTransaction<T>(

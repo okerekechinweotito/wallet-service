@@ -6,6 +6,7 @@ const port = Number(process.env.PORT) || 3000;
 const server = Bun.serve({
   port: port,
   fetch: app.fetch,
+  idleTimeout: 30, // 30 seconds timeout for slow database/API calls
 });
 
 console.log(`Server is running at http://${server.hostname}:${server.port}`);
