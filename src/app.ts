@@ -19,7 +19,7 @@ app.get("/", (c) => {
   return c.json(
     {
       status: "200",
-      message: "Welcome to the User Service API",
+      message: "Welcome to the Wallet Service",
       data: {
         docs: {
           scalar: `${baseUrl}/scalar`,
