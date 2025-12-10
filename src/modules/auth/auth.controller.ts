@@ -21,12 +21,12 @@ router.get("/google", async (c) => {
   if (!GOOGLE_CLIENT_ID)
     return c.json({ error: "GOOGLE_CLIENT_ID not configured" }, 500);
   const baseUrl = new URL(c.req.url).origin;
-  const redirectUri = `${baseUrl}/auth/google/callback`;
+  const redirectUri = `https://wallet-service-q4cc.onrender.com/auth/google/callback`;
   const scope = encodeURIComponent("openid email profile");
   const state = encodeURIComponent("state-");
   const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(
     redirectUri
-  )}&response_type=code&scope=${scope}&access_type=offline&state=${state}`;
+  )}&response_type=code&scope=${scope}&access_type=online&state=${state}`;
   return c.redirect(url, 302);
 });
 
