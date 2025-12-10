@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import jwt from "jsonwebtoken";
-import { query } from "../../shared/services/db.service";
+import { db } from "../../shared/services/db.service";
+import { users } from "../../shared/db/schema";
+import { sql } from "drizzle-orm";
 import logger from "../../utils/logger";
 
 const router = new Hono();
@@ -19,7 +21,14 @@ const JWT_SECRET =
 // Redirect to Google for consent
 router.get("/google", async (c) => {
   if (!GOOGLE_CLIENT_ID)
-    return c.json({ error: "GOOGLE_CLIENT_ID not configured" }, 500);
+    return c.json(
+      {
+        statusCode: 500,
+        message: "GOOGLE_CLIENT_ID not configured",
+        data: { message: "GOOGLE_CLIENT_ID not configured" },
+      },
+      500
+    );
   const baseUrl =
     (typeof Bun !== "undefined" && Bun.env && Bun.env.BASE_URL) ||
     process.env.BASE_URL ||
@@ -44,11 +53,28 @@ router.get("/google/callback", async (c) => {
       new URL(c.req.url).origin;
     const redirectUri = `${baseUrl.replace(/\/$/, "")}/auth/google/callback`;
     logger.info("Auth callback invoked", { redirectUri, codePresent: !!code });
-    if (!code) return c.json({ error: "Missing code" }, 400);
+    if (!code)
+      return c.json(
+        {
+          statusCode: 400,
+          message: "Missing code",
+          data: { message: "Missing code" },
+        },
+        400
+      );
     if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)
-      return c.json({ error: "Google credentials not configured" }, 500);
+      return c.json(
+        {
+          statusCode: 500,
+          message: "Google credentials not configured",
+          data: { message: "Google credentials not configured" },
+        },
+        500
+      );
 
-    logger.info("Exchanging code for token", { code: code.substring(0, 10) + "..." });
+    logger.info("Exchanging code for token", {
+      code: code.substring(0, 10) + "...",
+    });
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -60,19 +86,39 @@ router.get("/google/callback", async (c) => {
         grant_type: "authorization_code",
       }),
     });
-    
+
     if (!tokenRes.ok) {
       const errorText = await tokenRes.text();
-      logger.error("Google token exchange request failed", { status: tokenRes.status, error: errorText });
-      return c.json({ error: "Failed to exchange code for token" }, 500);
+      logger.error("Google token exchange request failed", {
+        status: tokenRes.status,
+        error: errorText,
+      });
+      return c.json(
+        {
+          statusCode: 500,
+          message: "Failed to exchange code for token",
+          data: { message: "Failed to exchange code for token" },
+        },
+        500
+      );
     }
-    
+
     const tokenJson = await tokenRes.json();
-    logger.info("Token exchange response", { hasIdToken: !!tokenJson.id_token, hasAccessToken: !!tokenJson.access_token });
+    logger.info("Token exchange response", {
+      hasIdToken: !!tokenJson.id_token,
+      hasAccessToken: !!tokenJson.access_token,
+    });
     const id_token = tokenJson.id_token;
     if (!id_token) {
       logger.error("Google token exchange failed", { detail: tokenJson });
-      return c.json({ error: "Failed to get id_token from Google" }, 500);
+      return c.json(
+        {
+          statusCode: 500,
+          message: "Failed to get id_token from Google",
+          data: { message: "Failed to get id_token from Google" },
+        },
+        500
+      );
     }
 
     // Verify id_token with Google (or decode locally)
@@ -81,23 +127,36 @@ router.get("/google/callback", async (c) => {
       `https://www.googleapis.com/oauth2/v3/tokeninfo?id_token=${id_token}`
     );
     const userInfo = await userInfoRes.json();
-    logger.info("User info retrieved", { sub: userInfo.sub, email: userInfo.email });
+    logger.info("User info retrieved", {
+      sub: userInfo.sub,
+      email: userInfo.email,
+    });
     const userId = userInfo.sub;
     const email = userInfo.email;
     const name = userInfo.name;
 
     // create user if not exists
     logger.info("Creating/updating user in database", { userId, email });
-    await query(
-      "INSERT INTO users(id, email, name) VALUES($1,$2,$3) ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name",
-      [userId, email, name]
-    );
+    await db
+      .insert(users)
+      .values({ id: userId, email, name })
+      .onConflictDoUpdate({
+        target: users.id,
+        set: { email: sql`EXCLUDED.email`, name: sql`EXCLUDED.name` },
+      });
     logger.info("User created/updated successfully");
 
     // sign JWT for our service
     if (!JWT_SECRET) {
       logger.error("JWT_SECRET not configured for signing");
-      return c.json({ error: "JWT_SECRET not configured" }, 500);
+      return c.json(
+        {
+          statusCode: 500,
+          message: "JWT_SECRET not configured",
+          data: { message: "JWT_SECRET not configured" },
+        },
+        500
+      );
     }
     const token = jwt.sign({ sub: userId, email, name }, JWT_SECRET as string, {
       expiresIn: "7d",
@@ -111,7 +170,11 @@ router.get("/google/callback", async (c) => {
       stack: err?.stack,
     });
     return c.json(
-      { error: err?.message || "Auth callback error", detail: err?.stack },
+      {
+        statusCode: 500,
+        message: err?.message || "Auth callback error",
+        data: { message: err?.message || "Auth callback error" },
+      },
       500
     );
   }

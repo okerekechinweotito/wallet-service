@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
   key TEXT UNIQUE,
+  key_fingerprint TEXT,
   name TEXT,
   permissions TEXT[],
   expires_at TIMESTAMP WITH TIME ZONE,
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 -- Ensure existing installations get the `name` column if missing
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_fingerprint TEXT;
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_wallets_user_id ON wallets(user_id);
@@ -46,3 +48,4 @@ CREATE INDEX IF NOT EXISTS idx_transactions_to_wallet ON transactions(to_wallet_
 CREATE INDEX IF NOT EXISTS idx_transactions_reference ON transactions(reference);
 CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key);
+CREATE INDEX IF NOT EXISTS idx_api_keys_fingerprint ON api_keys(key_fingerprint);

@@ -1,7 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import crypto from "crypto";
-import { query } from "../../shared/services/db.service";
+import bcrypt from "bcryptjs";
+import { db } from "../../shared/services/db.service";
+import { apiKeys } from "../../shared/db/schema";
+import { eq, and, gt, sql } from "drizzle-orm";
 import authMiddleware from "../../middlewares/auth.middleware";
 import logger from "../../utils/logger";
 
@@ -43,7 +46,11 @@ router.post("/create", async (c) => {
     const user = c.get("user");
     if (!user || (!(user as any).sub && !(user as any).id)) {
       return c.json(
-        { error: "Only authenticated users can create API keys" },
+        {
+          statusCode: 401,
+          message: "Only authenticated users can create API keys",
+          data: { message: "Only authenticated users can create API keys" },
+        },
         401
       );
     }
@@ -53,24 +60,47 @@ router.post("/create", async (c) => {
     const parsed = createKeySchema.parse(body);
 
     // enforce max 5 active keys
-    const activeRes = await query(
-      "SELECT count(*)::int as cnt FROM api_keys WHERE user_id = $1 AND revoked = false AND (expires_at IS NULL OR expires_at > now())",
-      [userId]
-    );
-    const activeCount = activeRes.rows[0].cnt || 0;
+    const result = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(apiKeys)
+      .where(
+        and(
+          eq(apiKeys.userId, userId),
+          eq(apiKeys.revoked, false),
+          sql`(${apiKeys.expiresAt} IS NULL OR ${apiKeys.expiresAt} > now())`
+        )
+      );
+    const activeCount = result[0]?.count || 0;
     if (activeCount >= 5)
-      return c.json({ error: "Maximum of 5 active API keys allowed" }, 400);
+      return c.json(
+        {
+          statusCode: 400,
+          message: "Maximum of 5 active API keys allowed",
+          data: { message: "Maximum of 5 active API keys allowed" },
+        },
+        400
+      );
 
     const expiresAt = parseExpiryToDate(parsed.expiry).toISOString();
     const id = crypto.randomUUID();
     const apiKeyValue = `sk_live_${Math.random()
       .toString(36)
       .slice(2)}${Date.now().toString(36)}`;
+    const keyFingerprint = crypto
+      .createHash("sha256")
+      .update(apiKeyValue)
+      .digest("hex");
+    const hashed = await bcrypt.hash(apiKeyValue, 12);
 
-    await query(
-      "INSERT INTO api_keys(id, user_id, key, name, permissions, expires_at) VALUES($1,$2,$3,$4,$5,$6)",
-      [id, userId, apiKeyValue, parsed.name, parsed.permissions, expiresAt]
-    );
+    await db.insert(apiKeys).values({
+      id,
+      userId,
+      key: hashed,
+      keyFingerprint,
+      name: parsed.name,
+      permissions: parsed.permissions,
+      expiresAt: new Date(expiresAt),
+    });
 
     logger.info("API key created", {
       userId,
@@ -91,10 +121,17 @@ router.post("/create", async (c) => {
         )
         .join("; ");
       logger.error("Failed to create API key", { error: message });
-      return c.json({ error: message }, 400);
+      return c.json({ statusCode: 400, message, data: { message } }, 400);
     }
     logger.error("Failed to create API key", { error: err.message });
-    return c.json({ error: err.message || "Invalid request" }, 400);
+    return c.json(
+      {
+        statusCode: 400,
+        message: err.message || "Invalid request",
+        data: { message: err.message || "Invalid request" },
+      },
+      400
+    );
   }
 });
 
@@ -110,7 +147,11 @@ router.post("/rollover", async (c) => {
     const user = c.get("user");
     if (!user || (!(user as any).sub && !(user as any).id)) {
       return c.json(
-        { error: "Only authenticated users can rollover API keys" },
+        {
+          statusCode: 401,
+          message: "Only authenticated users can rollover API keys",
+          data: { message: "Only authenticated users can rollover API keys" },
+        },
         401
       );
     }
@@ -119,14 +160,39 @@ router.post("/rollover", async (c) => {
     const body = await c.req.json();
     const parsed = rolloverSchema.parse(body);
 
-    const res = await query("SELECT * FROM api_keys WHERE id = $1", [
-      parsed.expired_key_id,
-    ]);
-    if (res.rowCount === 0) return c.json({ error: "Key not found" }, 404);
-    const key = res.rows[0];
-    if (key.user_id !== userId) return c.json({ error: "Forbidden" }, 403);
-    if (key.expires_at && new Date(key.expires_at) > new Date())
-      return c.json({ error: "Key not expired" }, 400);
+    const [key] = await db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.id, parsed.expired_key_id))
+      .limit(1);
+
+    if (!key)
+      return c.json(
+        {
+          statusCode: 404,
+          message: "Key not found",
+          data: { message: "Key not found" },
+        },
+        404
+      );
+    if (key.userId !== userId)
+      return c.json(
+        {
+          statusCode: 403,
+          message: "Forbidden",
+          data: { message: "Forbidden" },
+        },
+        403
+      );
+    if (key.expiresAt && new Date(key.expiresAt) > new Date())
+      return c.json(
+        {
+          statusCode: 400,
+          message: "Key not expired",
+          data: { message: "Key not expired" },
+        },
+        400
+      );
 
     // create new key reusing permissions
     const expiresAt = parseExpiryToDate(parsed.expiry).toISOString();
@@ -134,11 +200,21 @@ router.post("/rollover", async (c) => {
     const apiKeyValue = `sk_live_${Math.random()
       .toString(36)
       .slice(2)}${Date.now().toString(36)}`;
+    const keyFingerprint = crypto
+      .createHash("sha256")
+      .update(apiKeyValue)
+      .digest("hex");
+    const hashed = await bcrypt.hash(apiKeyValue, 12);
 
-    await query(
-      "INSERT INTO api_keys(id, user_id, key, name, permissions, expires_at) VALUES($1,$2,$3,$4,$5,$6)",
-      [id, userId, apiKeyValue, key.name || null, key.permissions, expiresAt]
-    );
+    await db.insert(apiKeys).values({
+      id,
+      userId,
+      key: hashed,
+      keyFingerprint,
+      name: key.name || null,
+      permissions: key.permissions || [],
+      expiresAt: new Date(expiresAt),
+    });
 
     logger.info("API key rolled over", {
       userId,
@@ -154,7 +230,14 @@ router.post("/rollover", async (c) => {
     );
   } catch (err: any) {
     logger.error("Failed to rollover API key", { error: err.message });
-    return c.json({ error: err.message || "Invalid request" }, 400);
+    return c.json(
+      {
+        statusCode: 400,
+        message: err.message || "Invalid request",
+        data: { message: err.message || "Invalid request" },
+      },
+      400
+    );
   }
 });
 

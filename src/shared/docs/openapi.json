@@ -152,6 +152,18 @@
             "example": "2025-01-01T12:00:00Z"
           }
         }
+      },
+      "IdResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "abc123" }
+        }
+      },
+      "WalletNumberResponse": {
+        "type": "object",
+        "properties": {
+          "wallet_number": { "type": "string", "example": "4566678954356" }
+        }
       }
     }
   },
@@ -578,6 +590,60 @@
           },
           "401": { "description": "Unauthorized" },
           "403": { "description": "API key missing read permission" }
+        }
+      }
+    },
+    "/wallet/api-key/id": {
+      "get": {
+        "tags": ["Keys"],
+        "summary": "Get API key id",
+        "description": "Returns the API key record id for the provided x-api-key header.",
+        "security": [{ "ApiKeyAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "API key id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/IdResponse" }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized / Invalid API key" },
+          "500": { "description": "Server error" }
+        }
+      }
+    },
+    "/wallet/id": {
+      "get": {
+        "tags": ["Wallet"],
+        "summary": "Get wallet id",
+        "description": "Returns the wallet id for the authenticated user. Accepts either Bearer JWT or x-api-key. API keys may pass `user_id` query parameter.",
+        "security": [{ "bearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": { "type": "string" },
+            "required": false,
+            "description": "Optional target user id when using an API key"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wallet number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletNumberResponse"
+                }
+              }
+            }
+          },
+          "400": { "description": "Missing user context" },
+          "401": { "description": "Unauthorized" },
+          "403": { "description": "API key missing read permission" },
+          "404": { "description": "Wallet not found" },
+          "500": { "description": "Server error" }
         }
       }
     }

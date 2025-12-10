@@ -2,21 +2,30 @@
   "name": "scaffold",
   "scripts": {
     "dev": "bun run --hot src/server.ts",
-    "start": "bun run src/server.ts"
+    "start": "bun run src/server.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun run src/shared/db/migrate.ts",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "migrate:keys": "bun run scripts/migrate-plain-keys.ts"
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.5.2",
     "@hono/zod-validator": "^0.7.4",
     "@scalar/hono-api-reference": "^0.9.26",
+    "bcryptjs": "^2.4.3",
+    "drizzle-orm": "^0.45.0",
     "hono": "^4.9.12",
+    "jsonwebtoken": "^9.0.0",
     "pg": "^8.11.0",
-    "zod": "^3.23.0",
-    "jsonwebtoken": "^9.0.0"
+    "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
     "@types/bun": "latest",
     "@types/jsonwebtoken": "^9.0.0",
-    "@types/pg": "^8.11.0"
+    "@types/pg": "^8.11.0",
+    "drizzle-kit": "^0.31.8"
   },
   "peerDependencies": {
     "typescript": "^5"

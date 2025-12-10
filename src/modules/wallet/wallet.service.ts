@@ -1,8 +1,15 @@
-import { query, withTransaction } from "../../shared/services/db.service";
+import { db } from "../../shared/services/db.service";
+import { wallets, transactions } from "../../shared/db/schema";
+import { eq, sql } from "drizzle-orm";
+import { Pool } from "pg";
 
 export async function getOrCreateWalletForUser(userId: string) {
-  const res = await query("SELECT * FROM wallets WHERE user_id = $1", [userId]);
-  if (res.rowCount > 0) return res.rows[0];
+  const [existing] = await db
+    .select()
+    .from(wallets)
+    .where(eq(wallets.userId, userId))
+    .limit(1);
+  if (existing) return existing;
 
   // Generate unique wallet number with retry logic
   let walletNumber: string;
@@ -14,11 +21,15 @@ export async function getOrCreateWalletForUser(userId: string) {
       .toString()
       .padStart(13, "0");
     try {
-      const insert = await query(
-        "INSERT INTO wallets(user_id, balance, wallet_number) VALUES($1, $2, $3) RETURNING *",
-        [userId, 0, walletNumber]
-      );
-      return insert.rows[0];
+      const [newWallet] = await db
+        .insert(wallets)
+        .values({
+          userId,
+          balance: 0,
+          walletNumber,
+        })
+        .returning();
+      return newWallet;
     } catch (err: any) {
       // Check if it's a unique constraint violation
       if (err.code === "23505") {
@@ -33,11 +44,13 @@ export async function getOrCreateWalletForUser(userId: string) {
 }
 
 export async function getBalance(userId: string) {
-  const res = await query("SELECT balance FROM wallets WHERE user_id = $1", [
-    userId,
-  ]);
-  if (res.rowCount === 0) return 0;
-  return res.rows[0].balance;
+  const [wallet] = await db
+    .select({ balance: wallets.balance })
+    .from(wallets)
+    .where(eq(wallets.userId, userId))
+    .limit(1);
+  if (!wallet) return 0;
+  return wallet.balance || 0;
 }
 
 export async function transferFunds(
@@ -49,49 +62,57 @@ export async function transferFunds(
     throw new Error("Amount must be positive");
   }
 
-  return withTransaction(async (client: any) => {
-    // Get sender wallet
-    const senderRes = await client.query(
-      "SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE",
-      [senderId]
-    );
-    if (senderRes.rowCount === 0) throw new Error("Sender wallet not found");
-    const sender = senderRes.rows[0];
+  return await db.transaction(async (tx) => {
+    // Get sender wallet with lock
+    const [sender] = await tx
+      .select()
+      .from(wallets)
+      .where(eq(wallets.userId, senderId))
+      .for("update")
+      .limit(1);
 
-    if (sender.balance < amount) throw new Error("Insufficient balance");
+    if (!sender) throw new Error("Sender wallet not found");
+    if ((sender.balance || 0) < amount) throw new Error("Insufficient balance");
 
-    // Get recipient
-    const recipientRes = await client.query(
-      "SELECT * FROM wallets WHERE wallet_number = $1 FOR UPDATE",
-      [walletNumber]
-    );
-    if (recipientRes.rowCount === 0) throw new Error("Recipient not found");
-    const recipient = recipientRes.rows[0];
+    // Get recipient with lock
+    const [recipient] = await tx
+      .select()
+      .from(wallets)
+      .where(eq(wallets.walletNumber, walletNumber))
+      .for("update")
+      .limit(1);
+
+    if (!recipient) throw new Error("Recipient not found");
 
     // Prevent self-transfers
-    if (sender.wallet_number === walletNumber) {
+    if (sender.walletNumber === walletNumber) {
       throw new Error("Cannot transfer to your own wallet");
     }
 
     // Deduct and credit
-    await client.query(
-      "UPDATE wallets SET balance = balance - $1 WHERE user_id = $2",
-      [amount, senderId]
-    );
-    await client.query(
-      "UPDATE wallets SET balance = balance + $1 WHERE wallet_number = $2",
-      [amount, walletNumber]
-    );
+    await tx
+      .update(wallets)
+      .set({ balance: sql`${wallets.balance} - ${amount}` })
+      .where(eq(wallets.userId, senderId));
 
-    // Record transactions (simplified)
+    await tx
+      .update(wallets)
+      .set({ balance: sql`${wallets.balance} + ${amount}` })
+      .where(eq(wallets.walletNumber, walletNumber));
+
+    // Record transaction
     const reference = `tr_${Math.random()
       .toString(36)
       .slice(2)}${Date.now().toString(36)}`;
 
-    await client.query(
-      "INSERT INTO transactions(type, amount, status, reference, from_user_id, to_wallet_number) VALUES($1,$2,$3,$4,$5,$6)",
-      ["transfer", amount, "success", reference, senderId, walletNumber]
-    );
+    await tx.insert(transactions).values({
+      type: "transfer",
+      amount,
+      status: "success",
+      reference,
+      fromUserId: senderId,
+      toWalletNumber: walletNumber,
+    });
 
     return { status: "success", reference };
   });
@@ -101,30 +122,32 @@ export async function processPaystackWebhook(
   reference: string,
   amount: number
 ) {
-  return withTransaction(async (client: any) => {
-    const txRes = await client.query(
-      "SELECT * FROM transactions WHERE reference = $1 FOR UPDATE",
-      [reference]
-    );
-    if (txRes.rowCount === 0) throw new Error("Transaction not found");
-    const tx = txRes.rows[0];
-    if (tx.status === "success") return { status: "already_processed" };
+  return await db.transaction(async (tx) => {
+    const [txn] = await tx
+      .select()
+      .from(transactions)
+      .where(eq(transactions.reference, reference))
+      .for("update")
+      .limit(1);
+
+    if (!txn) throw new Error("Transaction not found");
+    if (txn.status === "success") return { status: "already_processed" };
 
     // find wallet by wallet_number stored in transaction.to_wallet_number
-    const walletNumber = tx.to_wallet_number;
+    const walletNumber = txn.toWalletNumber;
     if (!walletNumber) throw new Error("Transaction missing target wallet");
 
     // credit wallet
-    await client.query(
-      "UPDATE wallets SET balance = balance + $1 WHERE wallet_number = $2",
-      [amount, walletNumber]
-    );
+    await tx
+      .update(wallets)
+      .set({ balance: sql`${wallets.balance} + ${amount}` })
+      .where(eq(wallets.walletNumber, walletNumber));
 
     // update transaction status
-    await client.query(
-      "UPDATE transactions SET status = $1 WHERE reference = $2",
-      ["success", reference]
-    );
+    await tx
+      .update(transactions)
+      .set({ status: "success" })
+      .where(eq(transactions.reference, reference));
 
     return { status: "credited" };
   });

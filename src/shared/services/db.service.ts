@@ -1,5 +1,6 @@
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import type { PoolClient } from "pg";
+import * as schema from "../db/schema";
 
 const connectionString =
   (typeof Bun !== "undefined" && Bun.env && Bun.env.DATABASE_URL) ||
@@ -39,6 +40,10 @@ try {
   });
 }
 
+// Create Drizzle instance
+export const db = drizzle(pool, { schema });
+
+// Legacy query function for backwards compatibility (will be deprecated)
 export async function query(text: string, params?: any[]) {
   try {
     return await pool.query(text, params);
@@ -48,24 +53,4 @@ export async function query(text: string, params?: any[]) {
   }
 }
 
-export async function withTransaction<T>(
-  fn: (client: PoolClient) => Promise<T>
-): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await fn(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-export default pool;
-import type { Strings_GET } from "../../modules/strings/string.schema";
-
-export const analyzedStrings = new Map<string, Strings_GET>();
+export default db;
